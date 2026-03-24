@@ -1,8 +1,7 @@
 import { z } from 'zod';
 
 export const loanCreateSchema = z.object({
-  userId: z.string().uuid(),
-  bookId: z.string().uuid(),
+  bookId: z.string().min(1),
 });
 
 export type LoanCreateInput = z.infer<typeof loanCreateSchema>;

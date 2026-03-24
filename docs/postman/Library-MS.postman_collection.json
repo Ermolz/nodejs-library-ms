@@ -1,25 +1,127 @@
 {
   "info": {
     "name": "Library MS",
-    "description": "Library Management System API",
+    "description": "Library Management System API with JWT auth, role-based access, and refresh tokens.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
     { "key": "baseUrl", "value": "http://localhost:3000" },
+    { "key": "token", "value": "" },
+    { "key": "refreshToken", "value": "" },
     { "key": "bookId", "value": "" },
     { "key": "userId", "value": "" },
     { "key": "loanId", "value": "" }
   ],
   "item": [
     {
+      "name": "Auth",
+      "description": "Public authentication endpoints.",
+      "item": [
+        {
+          "name": "Register",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "  const json = pm.response.json();",
+                  "  pm.collectionVariables.set('token', json.token);",
+                  "  pm.collectionVariables.set('refreshToken', json.refreshToken);",
+                  "  pm.collectionVariables.set('userId', json.user.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"user@example.com\",\n  \"password\": \"password123\",\n  \"name\": \"John Doe\"\n}"
+            },
+            "url": "{{baseUrl}}/auth/register",
+            "description": "Creates a new USER account and returns access token, refresh token, and user info."
+          }
+        },
+        {
+          "name": "Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  const json = pm.response.json();",
+                  "  pm.collectionVariables.set('token', json.token);",
+                  "  pm.collectionVariables.set('refreshToken', json.refreshToken);",
+                  "  pm.collectionVariables.set('userId', json.user.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"user@example.com\",\n  \"password\": \"password123\"\n}"
+            },
+            "url": "{{baseUrl}}/auth/login",
+            "description": "Logs in an existing user. Password must be at least 8 characters."
+          }
+        },
+        {
+          "name": "Refresh token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  const json = pm.response.json();",
+                  "  pm.collectionVariables.set('token', json.token);",
+                  "  pm.collectionVariables.set('refreshToken', json.refreshToken);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}"
+            },
+            "url": "{{baseUrl}}/auth/refresh",
+            "description": "Exchanges a refresh token for a new access token and a new refresh token."
+          }
+        }
+      ]
+    },
+    {
       "name": "Books",
+      "description": "Book management endpoints. Create, update, and delete require ADMIN role.",
       "item": [
         {
           "name": "Get all books",
           "request": {
             "method": "GET",
             "header": [],
-            "url": "{{baseUrl}}/books"
+            "url": "{{baseUrl}}/books",
+            "description": "Public endpoint that returns all books."
           }
         },
         {
@@ -27,7 +129,8 @@
           "request": {
             "method": "GET",
             "header": [],
-            "url": "{{baseUrl}}/books/{{bookId}}"
+            "url": "{{baseUrl}}/books/{{bookId}}",
+            "description": "Public endpoint that returns one book by id."
           }
         },
         {
@@ -36,104 +139,111 @@
             {
               "listen": "test",
               "script": {
+                "type": "text/javascript",
                 "exec": [
                   "if (pm.response.code === 201) {",
                   "  const json = pm.response.json();",
                   "  pm.collectionVariables.set('bookId', json.id);",
                   "}"
-                ],
-                "type": "text/javascript"
+                ]
               }
             }
           ],
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"title\": \"Clean Code\",\n  \"author\": \"Robert Martin\",\n  \"year\": 2008,\n  \"isbn\": \"978-0132350884\"\n}"
+              "raw": "{\n  \"title\": \"Clean Code\",\n  \"author\": \"Robert C. Martin\",\n  \"year\": 2008,\n  \"isbn\": \"9780132350884\"\n}"
             },
-            "url": "{{baseUrl}}/books"
+            "url": "{{baseUrl}}/books",
+            "description": "ADMIN only. Creates a new book and stores its id in collection variables."
           }
         },
         {
           "name": "Update book",
           "request": {
             "method": "PUT",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"title\": \"Clean Code (Updated)\",\n  \"year\": 2009\n}"
             },
-            "url": "{{baseUrl}}/books/{{bookId}}"
+            "url": "{{baseUrl}}/books/{{bookId}}",
+            "description": "ADMIN only. All fields in the body are optional."
           }
         },
         {
           "name": "Delete book",
           "request": {
             "method": "DELETE",
-            "header": [],
-            "url": "{{baseUrl}}/books/{{bookId}}"
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "url": "{{baseUrl}}/books/{{bookId}}",
+            "description": "ADMIN only. Deletes a book by id."
           }
         }
       ]
     },
     {
       "name": "Users",
+      "description": "User endpoints. Only ADMIN can access user lists and arbitrary user ids.",
       "item": [
+        {
+          "name": "Get current user (me)",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "url": "{{baseUrl}}/users/me",
+            "description": "Returns the currently authenticated user."
+          }
+        },
         {
           "name": "Get all users",
           "request": {
             "method": "GET",
-            "header": [],
-            "url": "{{baseUrl}}/users"
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "url": "{{baseUrl}}/users",
+            "description": "ADMIN only. Returns all users without passwordHash."
           }
         },
         {
           "name": "Get user by ID",
           "request": {
             "method": "GET",
-            "header": [],
-            "url": "{{baseUrl}}/users/{{userId}}"
-          }
-        },
-        {
-          "name": "Create user",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "exec": [
-                  "if (pm.response.code === 201) {",
-                  "  const json = pm.response.json();",
-                  "  pm.collectionVariables.set('userId', json.id);",
-                  "}"
-                ],
-                "type": "text/javascript"
-              }
-            }
-          ],
-          "request": {
-            "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"name\": \"John Doe\",\n  \"email\": \"john@example.com\"\n}"
-            },
-            "url": "{{baseUrl}}/users"
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "url": "{{baseUrl}}/users/{{userId}}",
+            "description": "ADMIN only. Returns one user without passwordHash."
           }
         }
       ]
     },
     {
       "name": "Loans",
+      "description": "Loan endpoints. USER sees only own loans; ADMIN sees all loans.",
       "item": [
         {
-          "name": "Get all loans",
+          "name": "Get loans",
           "request": {
             "method": "GET",
-            "header": [],
-            "url": "{{baseUrl}}/loans"
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "url": "{{baseUrl}}/loans",
+            "description": "Returns all loans for ADMIN, or only the current user's loans for USER."
           }
         },
         {
@@ -142,32 +252,39 @@
             {
               "listen": "test",
               "script": {
+                "type": "text/javascript",
                 "exec": [
                   "if (pm.response.code === 201) {",
                   "  const json = pm.response.json();",
                   "  pm.collectionVariables.set('loanId', json.id);",
                   "}"
-                ],
-                "type": "text/javascript"
+                ]
               }
             }
           ],
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"userId\": \"{{userId}}\",\n  \"bookId\": \"{{bookId}}\"\n}"
+              "raw": "{\n  \"bookId\": \"{{bookId}}\"\n}"
             },
-            "url": "{{baseUrl}}/loans"
+            "url": "{{baseUrl}}/loans",
+            "description": "Creates a loan for the authenticated user if the book is available."
           }
         },
         {
           "name": "Return book",
           "request": {
             "method": "POST",
-            "header": [],
-            "url": "{{baseUrl}}/loans/{{loanId}}/return"
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "url": "{{baseUrl}}/loans/{{loanId}}/return",
+            "description": "Returns a loan. USER can return only their own loan; ADMIN can return any loan."
           }
         }
       ]
