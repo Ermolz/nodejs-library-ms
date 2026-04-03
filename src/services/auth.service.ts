@@ -6,9 +6,14 @@ import { prisma } from '../db/client';
 import { AppError } from '../middleware/errorHandler';
 import { sendPasswordResetEmail } from '../utils/sendMail';
 import {
-  LoginInput,
-  RegisterInput,
-} from '../validators/auth.validator';
+  getAppBaseUrl,
+  getJwtExpiresIn,
+  getJwtSecret,
+  getPasswordResetExpiresMinutes,
+  getRefreshExpiresDays,
+} from '../utils/config';
+import { toUserResponse } from '../utils/userResponse';
+import { LoginInput, RegisterInput } from '../validators/auth.validator';
 import { UserResponse } from '../types/user';
 
 const SALT_ROUNDS = 10;
@@ -16,55 +21,8 @@ const REFRESH_TOKEN_BYTES = 32;
 const PASSWORD_RESET_TOKEN_BYTES = 32;
 const PASSWORD_RESET_SUCCESS_MESSAGE = 'Якщо вказаний email зареєстрований, лист з інструкціями надіслано.';
 
-function getJwtSecret(): string {
-  const secret = process.env.JWT_SECRET;
-  if (!secret || secret.length < 32) {
-    throw new Error('JWT_SECRET must be set and at least 32 characters');
-  }
-  return secret;
-}
-
-function jwtExpiresIn(): number {
-  const env = process.env.JWT_EXPIRES_IN;
-  if (env && /^\d+$/.test(env)) return parseInt(env, 10);
-  return 15 * 60;
-}
-
-function refreshExpiresDays(): number {
-  const days = process.env.REFRESH_TOKEN_EXPIRES_DAYS;
-  return days ? parseInt(days, 10) : 7;
-}
-
-function passwordResetExpiresMinutes(): number {
-  const raw = process.env.PASSWORD_RESET_TOKEN_EXPIRES_MINUTES;
-  if (!raw) return 15;
-  const minutes = parseInt(raw, 10);
-  if (Number.isNaN(minutes) || minutes <= 0) {
-    throw new Error('PASSWORD_RESET_TOKEN_EXPIRES_MINUTES must be a positive integer');
-  }
-  return minutes;
-}
-
-function getAppBaseUrl(): string {
-  const value = process.env.APP_BASE_URL;
-  if (!value) {
-    throw new Error('APP_BASE_URL must be set');
-  }
-  return value.replace(/\/$/, '');
-}
-
-function toUserResponse(user: { id: string; name: string; email: string; role: Role; avatarUrl: string | null }): UserResponse {
-  return {
-    id: user.id,
-    name: user.name,
-    email: user.email,
-    role: user.role as Role,
-    avatarUrl: user.avatarUrl,
-  };
-}
-
 function signAccessToken(payload: { userId: string; email: string; role: Role }): string {
-  return jwt.sign(payload, getJwtSecret(), { expiresIn: jwtExpiresIn() });
+  return jwt.sign(payload, getJwtSecret(), { expiresIn: getJwtExpiresIn() });
 }
 
 function unauthorized(message: string): never {
@@ -85,7 +43,7 @@ function hashResetToken(token: string): string {
 
 async function createRefreshToken(userId: string): Promise<{ refreshToken: string }> {
   const token = crypto.randomBytes(REFRESH_TOKEN_BYTES).toString('hex');
-  const days = refreshExpiresDays();
+  const days = getRefreshExpiresDays();
   const expiresAt = new Date();
   expiresAt.setDate(expiresAt.getDate() + days);
   await prisma.refreshToken.create({
@@ -97,6 +55,7 @@ async function createRefreshToken(userId: string): Promise<{ refreshToken: strin
 export async function register(input: RegisterInput): Promise<{ token: string; refreshToken: string; user: UserResponse }> {
   const existing = await prisma.user.findUnique({ where: { email: input.email } });
   if (existing) badRequest('Email already registered');
+
   const passwordHash = await bcrypt.hash(input.password, SALT_ROUNDS);
   const user = await prisma.user.create({
     data: {
@@ -106,6 +65,7 @@ export async function register(input: RegisterInput): Promise<{ token: string; r
       role: 'USER',
     },
   });
+
   const token = signAccessToken({ userId: user.id, email: user.email, role: user.role });
   const { refreshToken } = await createRefreshToken(user.id);
   return { token, refreshToken, user: toUserResponse(user) };
@@ -114,8 +74,10 @@ export async function register(input: RegisterInput): Promise<{ token: string; r
 export async function login(input: LoginInput): Promise<{ token: string; refreshToken: string; user: UserResponse }> {
   const user = await prisma.user.findUnique({ where: { email: input.email } });
   if (!user) unauthorized('Invalid email or password');
+
   const match = await bcrypt.compare(input.password, user.passwordHash);
   if (!match) unauthorized('Invalid email or password');
+
   const token = signAccessToken({ userId: user.id, email: user.email, role: user.role });
   const { refreshToken } = await createRefreshToken(user.id);
   return { token, refreshToken, user: toUserResponse(user) };
@@ -127,10 +89,12 @@ export async function refresh(refreshToken: string): Promise<{ token: string; re
     include: { user: true },
   });
   if (!record) unauthorized('Invalid refresh token');
+
   if (record.expiresAt < new Date()) {
     await prisma.refreshToken.delete({ where: { id: record.id } });
     unauthorized('Refresh token expired');
   }
+
   await prisma.refreshToken.delete({ where: { id: record.id } });
   const token = signAccessToken({
     userId: record.user.id,
@@ -138,6 +102,7 @@ export async function refresh(refreshToken: string): Promise<{ token: string; re
     role: record.user.role,
   });
   const { refreshToken: newRefreshToken } = await createRefreshToken(record.user.id);
+
   return {
     token,
     refreshToken: newRefreshToken,
@@ -155,9 +120,9 @@ export async function requestPasswordReset(email: string): Promise<{ message: st
 
   const rawToken = crypto.randomBytes(PASSWORD_RESET_TOKEN_BYTES).toString('hex');
   const tokenHash = hashResetToken(rawToken);
-  const expiresAt = new Date(Date.now() + passwordResetExpiresMinutes() * 60 * 1000);
+  const expiresAt = new Date(Date.now() + getPasswordResetExpiresMinutes() * 60 * 1000);
 
-  await prisma.passwordResetToken.create({
+  const createdToken = await prisma.passwordResetToken.create({
     data: {
       tokenHash,
       userId: user.id,
@@ -166,11 +131,17 @@ export async function requestPasswordReset(email: string): Promise<{ message: st
   });
 
   const resetUrl = `${getAppBaseUrl()}/reset-password?token=${rawToken}`;
-  await sendPasswordResetEmail({
-    to: user.email,
-    name: user.name,
-    resetUrl,
-  });
+
+  try {
+    await sendPasswordResetEmail({
+      to: user.email,
+      name: user.name,
+      resetUrl,
+    });
+  } catch (err) {
+    await prisma.passwordResetToken.delete({ where: { id: createdToken.id } });
+    throw err;
+  }
 
   return { message: PASSWORD_RESET_SUCCESS_MESSAGE };
 }

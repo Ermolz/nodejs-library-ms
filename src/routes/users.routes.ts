@@ -7,19 +7,10 @@ import { requireAuth } from '../middleware/auth.middleware';
 import { requireAdmin } from '../middleware/role.middleware';
 import { uploadAvatar } from '../middleware/upload.middleware';
 import { AppError } from '../middleware/errorHandler';
+import { toUserResponse } from '../utils/userResponse';
 
 const router = Router();
 const avatarsDirectory = path.join(process.cwd(), 'uploads', 'avatars');
-
-function toUserResponse(user: { id: string; name: string; email: string; role: string; avatarUrl: string | null }) {
-  return {
-    id: user.id,
-    name: user.name,
-    email: user.email,
-    role: user.role,
-    avatarUrl: user.avatarUrl,
-  };
-}
 
 function notFound(message: string): never {
   const err = new Error(message) as AppError;
@@ -86,7 +77,6 @@ router.post('/me/avatar', requireAuth, uploadAvatar, async (req: Request, res: R
       .jpeg({ quality: 82 })
       .toBuffer();
 
-    await deleteAvatarFile(currentUser.avatarUrl);
     await fs.writeFile(filePath, avatarBuffer);
 
     const avatarUrl = `/uploads/avatars/${fileName}`;
@@ -94,6 +84,8 @@ router.post('/me/avatar', requireAuth, uploadAvatar, async (req: Request, res: R
       where: { id: currentUser.id },
       data: { avatarUrl },
     });
+
+    await deleteAvatarFile(currentUser.avatarUrl);
 
     res.json({
       message: 'Аватарку успішно оновлено.',

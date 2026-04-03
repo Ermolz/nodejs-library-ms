@@ -28,19 +28,6 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Generate Prisma client
-        run: npx prisma generate
-        env:
-          DATABASE_URL: file:./prisma/dev.db
-          JWT_SECRET: 12345678901234567890123456789012
-          SMTP_HOST: smtp.example.com
-          SMTP_PORT: '587'
-          SMTP_AUTH_USER: user@example.com
-          SMTP_AUTH_PASS: password
-          SENDER_EMAIL: noreply@example.com
-          PASSWORD_RESET_TOKEN_EXPIRES_MINUTES: '15'
-          APP_BASE_URL: http://localhost:3000
-
       - name: Build project
         run: npm run build
         env:

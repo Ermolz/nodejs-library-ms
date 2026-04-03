@@ -1,4 +1,5 @@
 import nodemailer from 'nodemailer';
+import { getSmtpConfig } from './config';
 
 interface MailOptions {
   to: string;
@@ -7,38 +8,20 @@ interface MailOptions {
   html: string;
 }
 
-function getRequiredEnv(name: string): string {
-  const value = process.env[name];
-  if (!value) {
-    throw new Error(`${name} must be set`);
-  }
-  return value;
-}
-
-function getSmtpPort(): number {
-  const raw = getRequiredEnv('SMTP_PORT');
-  const port = Number(raw);
-  if (!Number.isInteger(port) || port <= 0) {
-    throw new Error('SMTP_PORT must be a positive integer');
-  }
-  return port;
-}
-
 function createTransport() {
+  const smtp = getSmtpConfig();
   return nodemailer.createTransport({
-    host: getRequiredEnv('SMTP_HOST'),
-    port: getSmtpPort(),
-    auth: {
-      user: getRequiredEnv('SMTP_AUTH_USER'),
-      pass: getRequiredEnv('SMTP_AUTH_PASS'),
-    },
+    host: smtp.host,
+    port: smtp.port,
+    auth: smtp.auth,
   });
 }
 
 export async function sendMail(options: MailOptions): Promise<void> {
   const transporter = createTransport();
+  const smtp = getSmtpConfig();
   await transporter.sendMail({
-    from: getRequiredEnv('SENDER_EMAIL'),
+    from: smtp.from,
     to: options.to,
     subject: options.subject,
     text: options.text,
