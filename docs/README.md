@@ -3,12 +3,13 @@
 Base URL: `http://localhost:3000`
 
 Protected routes require the header `Authorization: Bearer <token>`.
+Static avatar files are served from `/uploads`.
 
 Status codes:
-- `400 Bad Request` - validation error or business rule violation
+- `400 Bad Request` - validation error, invalid file, or business rule violation
 - `401 Unauthorized` - missing, invalid, or expired token
 - `403 Forbidden` - authenticated user does not have enough permissions
-- `404 Not Found` - entity was not found
+- `404 Not Found` - entity or avatar was not found
 
 Error response format:
 
@@ -27,6 +28,8 @@ Public endpoints:
 | POST | `/auth/register` | Register a new user |
 | POST | `/auth/login` | Login and receive tokens |
 | POST | `/auth/refresh` | Exchange a refresh token for a new access token |
+| POST | `/auth/request-password-reset` | Request a password reset email |
+| POST | `/auth/reset-password` | Set a new password using reset token |
 
 ### Register body
 
@@ -38,11 +41,6 @@ Public endpoints:
 }
 ```
 
-Validation:
-- `email` must be a valid email
-- `password` must be at least 8 characters
-- `name` is required
-
 ### Login body
 
 ```json
@@ -52,15 +50,44 @@ Validation:
 }
 ```
 
-Validation:
-- `email` must be a valid email
-- `password` must be at least 8 characters
-
 ### Refresh body
 
 ```json
 {
   "refreshToken": "your-refresh-token"
+}
+```
+
+### Request password reset body
+
+```json
+{
+  "email": "user@example.com"
+}
+```
+
+Successful response is always:
+
+```json
+{
+  "message": "Якщо вказаний email зареєстрований, лист з інструкціями надіслано."
+}
+```
+
+### Reset password body
+
+```json
+{
+  "token": "raw-reset-token",
+  "password": "newSecurePassword123"
+}
+```
+
+Success response:
+
+```json
+{
+  "message": "Пароль успішно змінено."
 }
 ```
 
@@ -74,7 +101,8 @@ Validation:
     "id": "clx...",
     "email": "user@example.com",
     "name": "Ivan Petrenko",
-    "role": "USER"
+    "role": "USER",
+    "avatarUrl": null
   }
 }
 ```
@@ -89,34 +117,6 @@ Validation:
 | PUT | `/books/:id` | Update a book | ADMIN |
 | DELETE | `/books/:id` | Delete a book | ADMIN |
 
-### Create book body
-
-```json
-{
-  "title": "Clean Code",
-  "author": "Robert C. Martin",
-  "year": 2008,
-  "isbn": "9780132350884"
-}
-```
-
-Validation:
-- `title` is required
-- `author` is required
-- `year` must be an integer greater than 0
-- `isbn` is required and must be unique
-
-### Update book body
-
-All fields are optional.
-
-```json
-{
-  "title": "Clean Code (Updated)",
-  "year": 2009
-}
-```
-
 ## Users
 
 | Method | Endpoint | Description | Access |
@@ -124,10 +124,39 @@ All fields are optional.
 | GET | `/users` | Get all users | ADMIN |
 | GET | `/users/:id` | Get user by id | ADMIN |
 | GET | `/users/me` | Get current authenticated user | Authenticated |
+| POST | `/users/me/avatar` | Upload or replace avatar | Authenticated |
+| DELETE | `/users/me/avatar` | Delete avatar | Authenticated |
 
-Notes:
-- `passwordHash` is never returned in API responses
-- user role is `USER` or `ADMIN`
+User responses include:
+- `id`
+- `name`
+- `email`
+- `role`
+- `avatarUrl`
+
+### Upload avatar
+
+Request type: `multipart/form-data`
+
+Field:
+- `avatar` - JPEG or PNG image, max 5 MB
+
+Successful response:
+
+```json
+{
+  "message": "Аватарку успішно оновлено.",
+  "avatarUrl": "/uploads/avatars/userid-123456789.jpg"
+}
+```
+
+Delete avatar response:
+
+```json
+{
+  "message": "Аватарку видалено."
+}
+```
 
 ## Loans
 
@@ -144,31 +173,13 @@ Behavior:
 - `USER` can return only their own loan
 - `ADMIN` can return any loan
 
-### Borrow book body
-
-```json
-{
-  "bookId": "book-id"
-}
-```
-
-Business rules:
-- a book must exist
-- a user must exist
-- a book cannot be borrowed if `available = false`
-- a book cannot have another active loan
-- when borrowed, the book becomes unavailable
-- when returned, the loan status becomes `RETURNED` and the book becomes available again
-
 ## Local setup
 
 1. Copy `.env.example` to `.env`
 2. Set `DATABASE_URL`
 3. Set `JWT_SECRET` to at least 32 characters
-4. Optionally set `JWT_EXPIRES_IN` and `REFRESH_TOKEN_EXPIRES_DAYS`
-5. Run `npm run db:migrate`
-6. Run `npm run dev`
-
-To create an admin user:
-- register a normal user via `/auth/register`
-- update its `role` to `ADMIN` in the database
+4. Set SMTP variables and `SENDER_EMAIL`
+5. Set `APP_BASE_URL`
+6. Run `npm install`
+7. Run `npm run db:migrate`
+8. Run `npm run dev`

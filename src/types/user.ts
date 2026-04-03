@@ -5,6 +5,7 @@ export interface UserResponse {
   name: string;
   email: string;
   role: Role;
+  avatarUrl: string | null;
 }
 
 export interface JwtPayload {

@@ -18,13 +18,15 @@ model Book {
 }
 
 model User {
-  id           String         @id @default(cuid())
-  name         String
-  email        String         @unique
-  passwordHash String
-  role         Role           @default(USER)
-  loans        Loan[]
-  refreshTokens RefreshToken[]
+  id                  String               @id @default(cuid())
+  name                String
+  email               String               @unique
+  passwordHash        String
+  role                Role                 @default(USER)
+  avatarUrl           String?
+  loans               Loan[]
+  refreshTokens       RefreshToken[]
+  passwordResetTokens PasswordResetToken[]
 }
 
 enum Role {
@@ -33,14 +35,14 @@ enum Role {
 }
 
 model Loan {
-  id         String    @id @default(cuid())
+  id         String     @id @default(cuid())
   userId     String
   bookId     String
   loanDate   DateTime
   returnDate DateTime?
   status     LoanStatus
-  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  book       Book     @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  book       Book       @relation(fields: [bookId], references: [id], onDelete: Cascade)
 }
 
 enum LoanStatus {
@@ -51,6 +53,14 @@ enum LoanStatus {
 model RefreshToken {
   id        String   @id @default(cuid())
   token     String   @unique
+  userId    String
+  expiresAt DateTime
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model PasswordResetToken {
+  id        String   @id @default(cuid())
+  tokenHash String   @unique
   userId    String
   expiresAt DateTime
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
