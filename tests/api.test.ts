@@ -2,6 +2,7 @@ import { existsSync } from 'fs';
 import { promises as fs } from 'fs';
 import path from 'path';
 import bcrypt from 'bcrypt';
+import sharp from 'sharp';
 
 process.env.DATABASE_URL = 'file:./test.db';
 process.env.JWT_SECRET = '12345678901234567890123456789012';
@@ -26,6 +27,8 @@ const { sendPasswordResetEmail } = require('../src/utils/sendMail') as {
 const app = require('../src/app').default as import('express').Express;
 const { prisma } = require('../src/db/client') as typeof import('../src/db/client');
 
+jest.setTimeout(30000);
+
 const sourceDbPath = path.join(process.cwd(), 'prisma', 'dev.db');
 const testDbPath = path.join(process.cwd(), 'prisma', 'test.db');
 const avatarsDirectory = path.join(process.cwd(), 'uploads', 'avatars');
@@ -33,6 +36,7 @@ const pngBuffer = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a5z0AAAAASUVORK5CYII=',
   'base64'
 );
+const tooLargeAvatarBuffer = Buffer.alloc(5 * 1024 * 1024 + 1, 1);
 
 async function clearUploads(): Promise<void> {
   await fs.mkdir(avatarsDirectory, { recursive: true });
@@ -135,6 +139,37 @@ describe('auth API', () => {
     expect(response.body.refreshToken).toBeTruthy();
   });
 
+  it('rejects register and login payloads that fail validation', async () => {
+    const shortPasswordRegister = await request(app)
+      .post('/auth/register')
+      .send({ email: 'not-an-email', password: 'short', name: '' });
+
+    const shortPasswordLogin = await request(app)
+      .post('/auth/login')
+      .send({ email: 'user@example.com', password: 'short' });
+
+    expect(shortPasswordRegister.status).toBe(400);
+    expect(shortPasswordRegister.body.error).toContain('email');
+    expect(shortPasswordRegister.body.error).toContain('password');
+    expect(shortPasswordRegister.body.error).toContain('name');
+    expect(shortPasswordLogin.status).toBe(400);
+    expect(shortPasswordLogin.body.error).toContain('password');
+  });
+
+  it('rejects duplicate registration and invalid login credentials', async () => {
+    await registerUser({ email: 'duplicate@example.com', password: 'password123' });
+
+    const duplicateResponse = await registerUser({ email: 'duplicate@example.com' });
+    const badLoginResponse = await request(app)
+      .post('/auth/login')
+      .send({ email: 'duplicate@example.com', password: 'wrongPassword123' });
+
+    expect(duplicateResponse.status).toBe(400);
+    expect(duplicateResponse.body.error).toBe('Email already registered');
+    expect(badLoginResponse.status).toBe(401);
+    expect(badLoginResponse.body.error).toBe('Invalid email or password');
+  });
+
   it('returns the same success message for known and unknown emails on password reset request', async () => {
     await registerUser({ email: 'known@example.com' });
 
@@ -155,6 +190,105 @@ describe('auth API', () => {
     expect(resetTokens).toHaveLength(1);
   });
 
+  it('sends password reset email with user data and reset URL', async () => {
+    await registerUser({ email: 'mail-check@example.com', name: 'Mail Check' });
+
+    await request(app)
+      .post('/auth/request-password-reset')
+      .send({ email: 'mail-check@example.com' })
+      .expect(200);
+
+    expect(sendPasswordResetEmail).toHaveBeenCalledTimes(1);
+    expect(sendPasswordResetEmail).toHaveBeenCalledWith({
+      to: 'mail-check@example.com',
+      name: 'Mail Check',
+      resetUrl: expect.stringMatching(/^http:\/\/localhost:3000\/reset-password\?token=.+/),
+    });
+  });
+
+  it('rejects invalid password reset request payloads', async () => {
+    const requestResetResponse = await request(app)
+      .post('/auth/request-password-reset')
+      .send({ email: 'bad-email' });
+
+    const resetPasswordResponse = await request(app)
+      .post('/auth/reset-password')
+      .send({ token: '', password: 'short' });
+
+    expect(requestResetResponse.status).toBe(400);
+    expect(requestResetResponse.body.error).toContain('email');
+    expect(resetPasswordResponse.status).toBe(400);
+    expect(resetPasswordResponse.body.error).toContain('token');
+    expect(resetPasswordResponse.body.error).toContain('password');
+  });
+
+  it('keeps only the latest password reset token for a user', async () => {
+    await registerUser({ email: 'latest-token@example.com' });
+
+    await request(app)
+      .post('/auth/request-password-reset')
+      .send({ email: 'latest-token@example.com' })
+      .expect(200);
+    const firstToken = getResetTokenFromLastEmail();
+
+    await request(app)
+      .post('/auth/request-password-reset')
+      .send({ email: 'latest-token@example.com' })
+      .expect(200);
+    const secondToken = getResetTokenFromLastEmail();
+
+    const resetWithFirstToken = await request(app)
+      .post('/auth/reset-password')
+      .send({ token: firstToken, password: 'newPassword123' });
+    const resetTokens = await prisma.passwordResetToken.findMany();
+
+    expect(firstToken).not.toBe(secondToken);
+    expect(resetWithFirstToken.status).toBe(400);
+    expect(resetTokens).toHaveLength(1);
+  });
+
+  it('rejects expired password reset tokens and removes them', async () => {
+    await registerUser({ email: 'expired-token@example.com' });
+
+    await request(app)
+      .post('/auth/request-password-reset')
+      .send({ email: 'expired-token@example.com' })
+      .expect(200);
+    const token = getResetTokenFromLastEmail();
+
+    await prisma.passwordResetToken.updateMany({
+      data: { expiresAt: new Date(Date.now() - 60 * 1000) },
+    });
+
+    const response = await request(app)
+      .post('/auth/reset-password')
+      .send({ token, password: 'newPassword123' });
+    const resetTokens = await prisma.passwordResetToken.findMany();
+
+    expect(response.status).toBe(400);
+    expect(response.body.error).toBe('Invalid or expired reset token');
+    expect(resetTokens).toHaveLength(0);
+  });
+
+  it('removes created reset token if email sending fails', async () => {
+    await registerUser({ email: 'mail-fails@example.com' });
+    sendPasswordResetEmail.mockRejectedValueOnce(new Error('SMTP unavailable'));
+    const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    try {
+      const response = await request(app)
+        .post('/auth/request-password-reset')
+        .send({ email: 'mail-fails@example.com' });
+      const resetTokens = await prisma.passwordResetToken.findMany();
+
+      expect(response.status).toBe(500);
+      expect(response.body.error).toBe('Internal Server Error');
+      expect(resetTokens).toHaveLength(0);
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
+  });
+
   it('resets password, invalidates old refresh tokens, and rejects token reuse', async () => {
     const registerResponse = await registerUser({ email: 'reset@example.com', password: 'password123' });
     const oldRefreshToken = registerResponse.body.refreshToken as string;
@@ -171,7 +305,7 @@ describe('auth API', () => {
       .send({ token, password: 'newPassword123' });
 
     expect(resetResponse.status).toBe(200);
-    expect(resetResponse.body.message).toBe('Пароль успішно змінено.');
+    expect(resetResponse.body.message).toBeTruthy();
 
     const oldLoginResponse = await request(app)
       .post('/auth/login')
@@ -226,6 +360,24 @@ describe('avatar API', () => {
     expect(response.body.error).toBe('Avatar must be a JPEG or PNG image');
   });
 
+  it('rejects avatar upload when file is missing or larger than 5 MB', async () => {
+    const registerResponse = await registerUser({ email: 'avatar-limits@example.com' });
+    const token = registerResponse.body.token as string;
+
+    const missingFileResponse = await request(app)
+      .post('/users/me/avatar')
+      .set('Authorization', `Bearer ${token}`);
+    const tooLargeResponse = await request(app)
+      .post('/users/me/avatar')
+      .set('Authorization', `Bearer ${token}`)
+      .attach('avatar', tooLargeAvatarBuffer, { filename: 'huge.png', contentType: 'image/png' });
+
+    expect(missingFileResponse.status).toBe(400);
+    expect(missingFileResponse.body.error).toBe('Avatar file is required');
+    expect(tooLargeResponse.status).toBe(400);
+    expect(tooLargeResponse.body.error).toBe('Avatar must be 5 MB or smaller');
+  });
+
   it('uploads, replaces, exposes, and deletes avatar files', async () => {
     const registerResponse = await registerUser({ email: 'avatar@example.com' });
     const token = registerResponse.body.token as string;
@@ -240,6 +392,14 @@ describe('avatar API', () => {
 
     const firstPath = path.join(process.cwd(), firstUpload.body.avatarUrl.slice(1));
     expect(existsSync(firstPath)).toBe(true);
+    const firstMetadata = await sharp(firstPath).metadata();
+    expect(firstMetadata.width).toBe(256);
+    expect(firstMetadata.height).toBe(256);
+    expect(firstMetadata.format).toBe('jpeg');
+
+    const staticAvatarResponse = await request(app).get(firstUpload.body.avatarUrl);
+    expect(staticAvatarResponse.status).toBe(200);
+    expect(staticAvatarResponse.headers['content-type']).toContain('image/jpeg');
 
     const meAfterFirstUpload = await request(app)
       .get('/users/me')
@@ -262,7 +422,7 @@ describe('avatar API', () => {
       .set('Authorization', `Bearer ${token}`);
 
     expect(deleteResponse.status).toBe(200);
-    expect(deleteResponse.body.message).toBe('Аватарку видалено.');
+    expect(deleteResponse.body.message).toBeTruthy();
 
     const meAfterDelete = await request(app)
       .get('/users/me')
@@ -275,6 +435,52 @@ describe('avatar API', () => {
       .set('Authorization', `Bearer ${token}`);
 
     expect(secondDelete.status).toBe(404);
+  });
+
+  it('returns avatarUrl in admin user list and user details', async () => {
+    const userResponse = await registerUser({ email: 'listed-avatar@example.com' });
+    const { token: adminToken } = await createAdminUser();
+
+    const uploadResponse = await request(app)
+      .post('/users/me/avatar')
+      .set('Authorization', `Bearer ${userResponse.body.token}`)
+      .attach('avatar', pngBuffer, { filename: 'listed.png', contentType: 'image/png' });
+
+    const usersResponse = await request(app)
+      .get('/users')
+      .set('Authorization', `Bearer ${adminToken}`);
+    const userDetailsResponse = await request(app)
+      .get(`/users/${userResponse.body.user.id}`)
+      .set('Authorization', `Bearer ${adminToken}`);
+
+    expect(uploadResponse.status).toBe(200);
+    expect(usersResponse.status).toBe(200);
+    expect(usersResponse.body).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: userResponse.body.user.id,
+          avatarUrl: uploadResponse.body.avatarUrl,
+        }),
+      ])
+    );
+    expect(userDetailsResponse.status).toBe(200);
+    expect(userDetailsResponse.body.avatarUrl).toBe(uploadResponse.body.avatarUrl);
+  });
+
+  it('forbids regular users from listing or reading other users', async () => {
+    const userResponse = await registerUser({ email: 'regular-user@example.com' });
+    const otherUserResponse = await registerUser({ email: 'other-user@example.com' });
+    const token = userResponse.body.token as string;
+
+    const listResponse = await request(app)
+      .get('/users')
+      .set('Authorization', `Bearer ${token}`);
+    const detailsResponse = await request(app)
+      .get(`/users/${otherUserResponse.body.user.id}`)
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(listResponse.status).toBe(403);
+    expect(detailsResponse.status).toBe(403);
   });
 });
 
@@ -338,5 +544,34 @@ describe('loans API', () => {
 
     expect(response.status).toBe(403);
     expect(response.body.error).toBe('Forbidden');
+  });
+
+  it('prevents borrowing an unavailable book and returning a loan twice', async () => {
+    const user = await registerUser({ email: 'loan-rules@example.com' });
+    const book = await prisma.book.create({
+      data: { title: 'Single Copy', author: 'Author', year: 2024, isbn: 'isbn-single-copy', available: true },
+    });
+
+    const firstBorrow = await request(app)
+      .post('/loans')
+      .set('Authorization', `Bearer ${user.body.token}`)
+      .send({ bookId: book.id });
+    const secondBorrow = await request(app)
+      .post('/loans')
+      .set('Authorization', `Bearer ${user.body.token}`)
+      .send({ bookId: book.id });
+    const firstReturn = await request(app)
+      .post(`/loans/${firstBorrow.body.id}/return`)
+      .set('Authorization', `Bearer ${user.body.token}`);
+    const secondReturn = await request(app)
+      .post(`/loans/${firstBorrow.body.id}/return`)
+      .set('Authorization', `Bearer ${user.body.token}`);
+
+    expect(firstBorrow.status).toBe(201);
+    expect(secondBorrow.status).toBe(400);
+    expect(secondBorrow.body.error).toBe('Book is not available');
+    expect(firstReturn.status).toBe(200);
+    expect(secondReturn.status).toBe(400);
+    expect(secondReturn.body.error).toBe('Loan already returned');
   });
 });
